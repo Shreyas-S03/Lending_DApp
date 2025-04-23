@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { ethers } from "ethers";
-import LendingPoolABI from "./abis/LendingPool.json";
-import BorrowingPoolABI from "./abis/BorrowingPool.json";
-import MockDAIABI from "./abis/MockDAI.json";
-import PriceOracleABI from "./abis/PriceOracle.json";
+import LendingPoolABI from "./abi/LendingPool.json";
+import BorrowingPoolABI from "./abi/BorrowingPool.json";
+import MockDAIABI from "./abi/MockDAI.json";
+import MockPriceOracleABI from "./abi/MockPriceOracle.json";
 import { CONTRACT_ADDRESSES } from "./contract-config";
 import "./App.css";
 import { callContractWithFallback } from './hooks/useContractFunction';
@@ -51,6 +51,9 @@ function App() {
   const [connectingWallet, setConnectingWallet] = useState(false);
   const [isLocalNetwork, setIsLocalNetwork] = useState(false);
   
+  // In the state variables section, add a new state to track the original deposit amount
+  const [originalDepositAmount, setOriginalDepositAmount] = useState("0");
+  
   // Initialize the app - only check for Ethereum provider, don't connect automatically
   useEffect(() => {
     // Setup event listeners for account changes once provider is available
@@ -91,7 +94,7 @@ function App() {
       setError("");
       
       // Prompt user to connect with MetaMask
-      const provider = new ethers.BrowserProvider(window.ethereum);
+        const provider = new ethers.BrowserProvider(window.ethereum);
       const accounts = await window.ethereum.request({ 
         method: "eth_requestAccounts" 
       });
@@ -101,8 +104,8 @@ function App() {
         setConnectingWallet(false);
         return;
       }
-      
-      const signer = await provider.getSigner();
+
+        const signer = await provider.getSigner();
       const address = await signer.getAddress();
       
       // Check if this is a local network (for UI elements only)
@@ -129,13 +132,13 @@ function App() {
       );
       
       const priceOracle = new ethers.Contract(
-        CONTRACT_ADDRESSES.PRICE_ORACLE,
-        PriceOracleABI.abi,
+        CONTRACT_ADDRESSES.MOCK_PRICE_ORACLE,
+        MockPriceOracleABI.abi,
         signer
       );
-      
-      setProvider(provider);
-      setSigner(signer);
+
+        setProvider(provider);
+        setSigner(signer);
       setAccount(address);
       setContracts({
         lendingPool,
@@ -144,7 +147,7 @@ function App() {
         priceOracle
       });
       setIsWalletConnected(true);
-      setSuccess("Wallet connected successfully!");
+      setSuccess("Wallet connected successfully! Note: This is a test dApp, so MetaMask may show security warnings. These are normal and you can safely confirm transactions.");
       
       // Update balances and data immediately after connection
       updateData(provider, address, { lendingPool, borrowingPool, mockDAI, priceOracle });
@@ -187,39 +190,58 @@ function App() {
       return;
     }
     
+    console.log("Updating data for account:", accountAddress);
+    
     try {
+      // Check the contract balance directly to debug issues
+      try {
+        const contractBalance = await providerInstance.getBalance(contractInstances.lendingPool.target);
+        console.log("LendingPool contract balance:", ethers.formatEther(contractBalance), "ETH");
+      } catch (e) {
+        console.error("Failed to check contract balance:", e);
+      }
+      
       // Get ETH balance
       try {
         const ethBalanceWei = await providerInstance.getBalance(accountAddress);
         setEthBalance(ethers.formatEther(ethBalanceWei));
+        console.log("ETH balance updated:", ethers.formatEther(ethBalanceWei));
       } catch (balanceError) {
         console.error("Error fetching ETH balance:", balanceError);
         setEthBalance("0");
       }
       
-      // Get interest rate - using the callContractWithFallback helper
+      // Get deposit balance and interest info
       try {
-        const interestRateBps = await callContractWithFallback(
-          contractInstances.lendingPool,
-          ['getLendingInterestRate', 'getInterestRate']
-        );
-        setInterestRate((interestRateBps.toString() / 100).toFixed(2));
-      } catch (interestRateError) {
-        console.error("Error fetching interest rate:", interestRateError);
-        setInterestRate("0.00");
-      }
-      
-      // Get deposit balance with accrued interest - using the callContractWithFallback helper
-      try {
-        const depositBalanceWei = await callContractWithFallback(
-          contractInstances.lendingPool,
-          ['getBalance', 'getDepositBalance'],
-          [accountAddress]
-        );
-        setDepositBalance(ethers.formatEther(depositBalanceWei));
+        // First get the actual deposit info from the contract (without interest)
+        const depositInfo = await contractInstances.lendingPool.deposits(accountAddress);
+        const originalDepositWei = depositInfo.amount;
+        const originalAmount = ethers.formatEther(originalDepositWei);
+        setOriginalDepositAmount(originalAmount);
+        console.log("Original deposit amount:", originalAmount);
+        
+        // Then get the balance including pending interest
+        const depositBalanceWei = await contractInstances.lendingPool.getBalance(accountAddress);
+        console.log("Deposit balance with interest:", depositBalanceWei.toString());
+        const formattedBalance = ethers.formatEther(depositBalanceWei);
+        console.log("Setting deposit balance to:", formattedBalance);
+        setDepositBalance(formattedBalance);
+        
       } catch (balanceError) {
         console.error("Error fetching deposit balance:", balanceError);
         setDepositBalance("0");
+        setOriginalDepositAmount("0");
+      }
+      
+      // Get interest rate
+      try {
+        const interestRatePoints = await contractInstances.lendingPool.getInterestRate();
+        const rate = interestRatePoints / 100; // Convert basis points to percentage
+        console.log("Interest rate from contract:", rate);
+        setInterestRate(rate);
+      } catch (interestError) {
+        console.error("Error fetching interest rate:", interestError);
+        setInterestRate("3"); // Default to 3%
       }
       
       // Get DAI balance
@@ -260,7 +282,7 @@ function App() {
             console.error("Error fetching loan health:", healthError);
             setLoanHealth("0");
           }
-        } else {
+      } else {
           setMaxBorrowAmount("0");
           setLoanHealth("0");
         }
@@ -281,16 +303,46 @@ function App() {
   useEffect(() => {
     if (!isWalletConnected) return;
     
-    // Call updateData with current instances
-    const dataInterval = setInterval(() => {
-      updateData(provider, account, contracts);
-    }, 30000);
-    
     // Initial update
     updateData(provider, account, contracts);
     
+    // Call updateData with current instances more frequently (every 10 seconds)
+    const dataInterval = setInterval(() => {
+      updateData(provider, account, contracts);
+    }, 10000); // Changed from 30000 to 10000
+    
     return () => clearInterval(dataInterval);
   }, [contracts, account, provider, isWalletConnected]);
+  
+  // Add a function to manually refresh data
+  const refreshData = () => {
+    if (!isWalletConnected) return;
+    
+    setLoading(true);
+    console.log("Manual refresh requested");
+    
+    // Update data and then set loading to false
+    updateData(provider, account, contracts)
+      .then(() => {
+        setLoading(false);
+        setSuccess("Data refreshed successfully");
+        
+        // Clear success message after 3 seconds
+        setTimeout(() => {
+          setSuccess("");
+        }, 3000);
+      })
+      .catch((error) => {
+        console.error("Error refreshing data:", error);
+        setLoading(false);
+        setError("Failed to refresh data");
+        
+        // Clear error message after 3 seconds
+        setTimeout(() => {
+          setError("");
+        }, 3000);
+      });
+  };
   
   // LENDING FUNCTIONS
   const handleDeposit = async () => {
@@ -317,29 +369,30 @@ function App() {
         return;
       }
       
-      // Proceed with deposit with a more graceful error handling
-      try {
-        const tx = await contracts.lendingPool.deposit({
-          value: amountToDeposit
-        });
-        
-        await tx.wait();
-        setSuccess(`Successfully deposited ${depositAmount} ETH`);
-        setDepositAmount("");
-        
-        // Update balances
+      console.log("Depositing", depositAmount, "ETH to contract:", contracts.lendingPool.target);
+      console.log("Contract ABI:", JSON.stringify(LendingPoolABI.abi.find(item => item.name === "deposit")));
+      
+      const tx = await contracts.lendingPool.deposit({
+        value: amountToDeposit,
+        gasLimit: 500000 // Set a high gas limit to ensure the transaction goes through
+      });
+      
+      console.log("Deposit transaction sent:", tx.hash);
+      console.log("Waiting for transaction to be mined...");
+      
+      const receipt = await tx.wait();
+      console.log("Transaction mined:", receipt);
+      
+      setSuccess(`Successfully deposited ${depositAmount} ETH`);
+      setDepositAmount("");
+      
+      // Update data
+      setTimeout(() => {
         updateData(provider, account, contracts);
-      } catch (txError) {
-        if (txError.code === 'INSUFFICIENT_FUNDS') {
-          setError(`Transaction failed: Insufficient funds. Make sure you have enough ETH for the deposit amount plus gas fees.`);
-        } else {
-          setError(`Transaction failed: ${txError.message}`);
-        }
-        console.error("Deposit transaction error:", txError);
-      }
+      }, 1000);
     } catch (error) {
       console.error("Deposit error:", error);
-      setError("Failed to deposit ETH. Please try again.");
+      setError(`Failed to deposit ETH: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -351,29 +404,52 @@ function App() {
       return;
     }
     
-    if (parseFloat(withdrawAmount) > parseFloat(depositBalance)) {
-      setError("Insufficient balance for withdrawal");
-      return;
-    }
-    
     try {
       setLoading(true);
       setError("");
       setSuccess("");
+
+      // Get current balance with interest for validation
+      const currentBalanceWithInterest = await contracts.lendingPool.getBalance(account);
       
-      const tx = await contracts.lendingPool.withdraw(
-        ethers.parseEther(withdrawAmount)
-      );
+      // Convert the withdrawal amount to Wei
+      const amountToWithdraw = ethers.parseEther(withdrawAmount);
       
-      await tx.wait();
-      setSuccess(`Successfully withdrew ${withdrawAmount} ETH`);
+      // Check if the requested withdrawal amount is greater than the balance with interest
+      if (amountToWithdraw > currentBalanceWithInterest) {
+        setError(`Cannot withdraw more than your current balance with interest (${ethers.formatEther(currentBalanceWithInterest)} ETH)`);
+        setLoading(false);
+        return;
+      }
+      
+      console.log("Withdrawing", withdrawAmount, "ETH (including interest)");
+      console.log("Current balance with interest:", ethers.formatEther(currentBalanceWithInterest), "ETH");
+      
+      // Execute the withdrawal transaction
+      const tx = await contracts.lendingPool.withdraw(amountToWithdraw, {
+        gasLimit: 500000
+      });
+      
+      console.log("Withdraw transaction sent:", tx.hash);
+      const receipt = await tx.wait();
+      console.log("Transaction mined:", receipt);
+      
+      setSuccess(`Successfully withdrew ${withdrawAmount} ETH including interest`);
       setWithdrawAmount("");
       
-      // Update balances
-      updateData(provider, account, contracts);
+      // Update data immediately
+      setTimeout(() => {
+        updateData(provider, account, contracts);
+      }, 1000);
     } catch (error) {
       console.error("Withdraw error:", error);
-      setError("Failed to withdraw ETH. Please try again.");
+      
+      // Provide more helpful error messages
+      if (error.message.includes("Insufficient balance")) {
+        setError("Withdrawal failed: The contract's internal balance calculation might differ slightly from what's displayed. Try withdrawing a slightly smaller amount.");
+      } else {
+        setError(`Failed to withdraw ETH: ${error.message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -385,7 +461,7 @@ function App() {
       setError("Please enter a valid collateral amount");
       return;
     }
-    
+
     try {
       setLoading(true);
       setError("");
@@ -541,10 +617,110 @@ function App() {
     }
   };
   
+  // Helper function to safely try contract calls with better error handling
+  const tryAgain = async (fn, errorMessage = "Transaction failed") => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.error(errorMessage, error);
+      // Extract user-friendly message from error
+      if (error.code === 'INSUFFICIENT_FUNDS') {
+        setError("Insufficient funds for this transaction including gas fees.");
+      } else if (error.code === 'UNPREDICTABLE_GAS_LIMIT') {
+        setError("Transaction would fail: " + (error.reason || "check your inputs and try again"));
+      } else if (error.reason) {
+        setError(error.reason);
+      } else {
+        setError(errorMessage);
+      }
+      return null;
+    }
+  };
+  
+  // Add this function in a suitable location in the component
+  const triggerImportantDataUpdate = () => {
+    console.log("Triggering important data update");
+    // Run update 3 times with delays to ensure we get the latest state
+    updateData(provider, account, contracts);
+    
+    setTimeout(() => {
+      updateData(provider, account, contracts);
+    }, 2000);
+    
+    setTimeout(() => {
+      updateData(provider, account, contracts);
+    }, 5000);
+  };
+
+  // Add this function at the appropriate location in your component
+  const showBorrowingExplanation = () => {
+    setSuccess(`
+      How borrowing works:
+      1. Deposit ETH as collateral in the Borrowing Pool
+      2. Based on your collateral value and the ETH price, you can borrow DAI (up to 66% of your collateral value)
+      3. DAI is minted directly by the BorrowingPool contract when you borrow
+      4. To repay, you must approve the borrowing contract to spend your DAI, then call repay
+      5. Keep your loan health above 120% to avoid liquidation
+    `);
+    
+    // Clear the message after 15 seconds
+    setTimeout(() => {
+      setSuccess("");
+    }, 15000);
+  };
+
+  // Add a lending explanation function
+  const showLendingExplanation = () => {
+    setSuccess(`
+      How lending works:
+      1. Deposit ETH into the LendingPool to earn 5% APR interest
+      2. Your deposited ETH acts as liquidity for the platform
+      3. Interest accrues continuously and compounds with each transaction
+      4. Withdraw your ETH plus earned interest at any time
+      5. The Lending Pool is separate from the Borrowing Pool, but both form the complete DeFi system
+    `);
+    
+    // Clear the message after 15 seconds
+    setTimeout(() => {
+      setSuccess("");
+    }, 15000);
+  };
+
+  // Add a dashboard explanation function
+  const showDashboardExplanation = () => {
+    setSuccess(`
+      How this DeFi platform works:
+      1. Lending: Users deposit ETH to earn interest (currently 5% APR)
+      2. Borrowing: Users deposit ETH as collateral and borrow DAI stablecoins
+      3. Collateralization: Each loan requires 150% collateral (e.g., $150 in ETH to borrow $100 DAI)
+      4. Liquidation: If collateral value falls below 120% of loan value, the loan can be liquidated
+      5. The platform uses a price oracle to track ETH/USD price for collateral calculations
+    `);
+    
+    // Clear the message after 15 seconds
+    setTimeout(() => {
+      setSuccess("");
+    }, 15000);
+  };
+
+  // Helper function to calculate a safe maximum withdrawal amount (99.5% of the displayed balance with interest)
+  const getSafeWithdrawalAmount = () => {
+    if (parseFloat(depositBalance) <= 0) return "0";
+    
+    // Apply a small safety margin (99.5%) to avoid potential rounding/calculation differences
+    const safeAmount = parseFloat(depositBalance) * 0.995;
+    return safeAmount.toFixed(6);
+  };
+  
+  // Function to set the withdrawal amount to the maximum safe amount
+  const setMaxWithdrawal = () => {
+    setWithdrawAmount(getSafeWithdrawalAmount());
+  };
+
   return (
     <div className="app-container">
       <header>
-        <h1>Decentralized Lending & Borrowing</h1>
+      <h1>Decentralized Lending & Borrowing</h1>
         <div className="wallet-info">
           {isWalletConnected ? (
             <>
@@ -609,10 +785,23 @@ function App() {
           
           {activeTab === "lend" && (
             <section className="lending-section">
-              <h2>Lending Pool</h2>
+              <div className="section-header">
+                <h2>Lending Pool</h2>
+                <button 
+                  className="info-btn" 
+                  onClick={showLendingExplanation}
+                >
+                  How It Works
+                </button>
+              </div>
               <div className="info-box">
-                <p>Your Deposit: {parseFloat(depositBalance).toFixed(4)} ETH</p>
+                <p>Your Principal Deposit: {parseFloat(originalDepositAmount).toFixed(4)} ETH</p>
+                <p>Current Balance with Interest: {parseFloat(depositBalance).toFixed(4)} ETH</p>
+                <p>Accrued Interest: {(parseFloat(depositBalance) - parseFloat(originalDepositAmount)).toFixed(6)} ETH</p>
                 <p>Interest Rate: {interestRate}% APR</p>
+                <p className="interest-explainer">
+                  <i>Note: Interest is calculated in real-time but officially credited to your account only when you make a deposit or withdrawal.</i>
+                </p>
               </div>
               
               <div className="action-container">
@@ -620,12 +809,12 @@ function App() {
                   <h3>Deposit ETH</h3>
                   <p>Earn {interestRate}% APR on your deposits</p>
                   <div className="input-group">
-                    <input
-                      type="text"
-                      placeholder="Amount in ETH"
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
-                    />
+      <input
+        type="text"
+        placeholder="Amount in ETH"
+        value={depositAmount}
+        onChange={(e) => setDepositAmount(e.target.value)}
+      />
                     <button 
                       onClick={handleDeposit} 
                       disabled={loading || !account || !contracts.lendingPool}
@@ -647,11 +836,19 @@ function App() {
                     />
                     <button 
                       onClick={handleWithdraw} 
-                      disabled={loading || !account || !contracts.lendingPool || parseFloat(depositBalance) === 0}
+                      disabled={loading || !account || !contracts.lendingPool || parseFloat(depositBalance) <= 0}
                     >
                       {loading ? "Processing..." : "Withdraw"}
                     </button>
                   </div>
+                  {parseFloat(depositBalance) > 0 && (
+                    <button 
+                      className="max-btn" 
+                      onClick={setMaxWithdrawal}
+                    >
+                      Withdraw Max ({getSafeWithdrawalAmount()} ETH)
+                    </button>
+                  )}
                 </div>
               </div>
             </section>
@@ -659,7 +856,15 @@ function App() {
           
           {activeTab === "borrow" && (
             <section className="borrowing-section">
-              <h2>Borrowing</h2>
+              <div className="section-header">
+                <h2>Borrowing</h2>
+                <button 
+                  className="info-btn" 
+                  onClick={showBorrowingExplanation}
+                >
+                  How It Works
+                </button>
+              </div>
               <div className="info-box">
                 <p>ETH Price: ${parseFloat(ethPrice).toFixed(2)} USD</p>
                 <p>Collateral Deposited: {parseFloat(collateralAmount).toFixed(4)} ETH</p>
@@ -757,18 +962,36 @@ function App() {
           
           {activeTab === "dashboard" && (
             <section className="dashboard-section">
-              <h2>Dashboard</h2>
+              <div className="dashboard-header">
+                <h2>Dashboard</h2>
+                <div className="dashboard-actions">
+                  <button 
+                    className="info-btn" 
+                    onClick={showDashboardExplanation}
+                    style={{ marginRight: '10px' }}
+                  >
+                    How It Works
+                  </button>
+                  <button 
+                    className="refresh-btn" 
+                    onClick={refreshData}
+                    disabled={loading}
+                  >
+                    {loading ? "Refreshing..." : "Refresh Data"}
+                  </button>
+                </div>
+              </div>
               
               <div className="dashboard-container">
                 <div className="dashboard-card">
                   <h3>Lending Summary</h3>
-                  <p><strong>Your Deposit:</strong> {parseFloat(depositBalance).toFixed(4)} ETH</p>
+                  <p><strong>Principal Deposit:</strong> {parseFloat(originalDepositAmount).toFixed(4)} ETH</p>
+                  <p><strong>Current Balance with Interest:</strong> {parseFloat(depositBalance).toFixed(4)} ETH</p>
+                  <p><strong>Accrued Interest:</strong> {(parseFloat(depositBalance) - parseFloat(originalDepositAmount)).toFixed(6)} ETH</p>
                   <p><strong>Interest Rate:</strong> {interestRate}% APR</p>
-                  <p><strong>Interest Earned:</strong> {
-                    parseFloat(depositBalance) > 0 ? 
-                    (parseFloat(depositBalance) - (parseFloat(depositBalance) / (1 + parseFloat(interestRate)/100))).toFixed(6) : 
-                    "0.000000"
-                  } ETH</p>
+                  <p className="interest-explainer">
+                    <i>Interest is automatically added to your balance when you make a deposit or withdrawal.</i>
+                  </p>
                 </div>
                 
                 <div className="dashboard-card">

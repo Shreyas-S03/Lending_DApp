@@ -1,18 +1,35 @@
 {
   "name": "lending-dapp",
   "version": "1.0.0",
-  "description": "",
+  "description": "A decentralized lending and borrowing platform",
   "main": "index.js",
   "scripts": {
     "test": "hardhat test",
+    "compile": "hardhat compile",
     "deploy": "hardhat run scripts/deploy.js --network localhost",
-    "node": "hardhat node"
+    "deploy:hardhat": "hardhat run scripts/deploy.js --network hardhat",
+    "node": "hardhat node",
+    "clean": "hardhat clean",
+    "lint": "solhint 'contracts/**/*.sol'",
+    "interact": "hardhat run scripts/interact.js --network localhost",
+    "start:frontend": "cd frontend && npm start",
+    "start:all": "concurrently \"npm run node\" \"npm run deploy\" \"npm run start:frontend\"",
+    "verify-abis": "npx hardhat run scripts/verify-interfaces.js --network localhost"
   },
-  "keywords": [],
+  "keywords": [
+    "ethereum",
+    "defi",
+    "lending",
+    "borrowing",
+    "hardhat"
+  ],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "hardhat": "^2.22.19"
+  },
+  "dependencies": {
+    "concurrently": "^8.2.0"
   }
 }

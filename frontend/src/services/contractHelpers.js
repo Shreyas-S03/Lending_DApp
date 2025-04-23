@@ -2,10 +2,10 @@ import { ethers } from 'ethers';
 import contractConfig from '../contract-config';
 
 // Contract ABIs
-import LendingPoolABI from '../abis/LendingPool.json';
-import BorrowingPoolABI from '../abis/BorrowingPool.json';
-import MockDaiABI from '../abis/MockDAI.json';
-import PriceOracleABI from '../abis/PriceOracle.json';
+import LendingPoolABI from '../abi/LendingPool.json';
+import BorrowingPoolABI from '../abi/BorrowingPool.json';
+import MockDaiABI from '../abi/MockDAI.json';
+import PriceOracleABI from '../abi/MockPriceOracle.json';
 
 // Supported network IDs - add all networks your dApp supports
 const SUPPORTED_NETWORKS = [
@@ -66,7 +66,7 @@ export const getContracts = async (signer) => {
     );
 
     const priceOracle = new ethers.Contract(
-      contractConfig.PRICE_ORACLE,
+      contractConfig.MOCK_PRICE_ORACLE || contractConfig.PRICE_ORACLE,
       PriceOracleABI.abi,
       signer
     );
@@ -134,4 +134,27 @@ export const getNetworkName = (chainId) => {
   };
   
   return networks[chainId] || `Unknown Network (${chainId})`;
+};
+
+/**
+ * Safely get contract ABI
+ * This helper function ensures we don't crash if an ABI file is missing
+ * @param {string} contractName - The name of the contract
+ * @returns {Object|null} The ABI object or null if not found
+ */
+export const getContractABI = (contractName) => {
+  try {
+    // First try to load from abi directory (compiled contracts)
+    const abi = require(`../abi/${contractName}.json`);
+    return abi;
+  } catch (error) {
+    try {
+      // Fallback to abis directory (manually added ABIs)
+      const abi = require(`../abis/${contractName}.json`);
+      return abi;
+    } catch (fallbackError) {
+      console.error(`Failed to load ABI for ${contractName}:`, fallbackError);
+      return null;
+    }
+  }
 }; 
